@@ -1,68 +1,56 @@
-const fs = require('fs');
-const path = require('path');
-const axios = require('axios');
+import axios from 'axios';
 
-// API endpoint for anomaly detection (replace with your actual endpoint)
-const anomalyDetectionAPI = 'https://your-anomaly-detection-api.com/analyze';
+const QWEN_API_URL = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions';
+const QWEN_MODEL = 'qwen-plus';
 
-// Your API key (replace with your actual API key)
-const apiKey = 'your-api-key-here'; // Replace this with your actual API key
+const SYSTEM_PROMPT = `You are a call analysis assistant helping to detect phone scams.
+Given a call transcript, produce a concise summary with three sections:
+1. Summary — what the call was about in 2–3 sentences.
+2. Suspicious Signals — bullet list of any red flags (urgency, requests for money/OTP/personal data, impersonation, threats). Write "None detected" if clean.
+3. Risk Level — one of: LOW | MEDIUM | HIGH, with a one-line reason.
 
-// Path to the folder containing log files
-const logFolderPath = './logs'; // Update with your folder path
+Be objective. Focus on protecting users from scams.`;
 
-// Function to read log files and send to API for anomaly detection
-function readAndSendLogs(logFolderPath) {
-  // Read all files in the directory
-  fs.readdir(logFolderPath, (err, files) => {
-    if (err) {
-      console.error('Error reading the directory:', err);
-      return;
-    }
+/**
+ * Sends a call transcript to Alibaba Qwen and returns a structured summary.
+ * @param {string} transcript - Full call transcript text
+ * @returns {Promise<{ summary: string, error: string|null }>}
+ */
+export async function summarizeCallLogs(transcript) {
+  const apiKey = import.meta.env.VITE_ALIBABA_API_KEY;
 
-    // Filter out non-text files
-    const logFiles = files.filter(file => file.endsWith('.txt'));
+  if (!apiKey) {
+    return { summary: null, error: 'VITE_ALIBABA_API_KEY is not set in environment variables.' };
+  }
 
-    logFiles.forEach(file => {
-      const filePath = path.join(logFolderPath, file);
+  if (!transcript || transcript.trim().length === 0) {
+    return { summary: null, error: 'Transcript is empty.' };
+  }
 
-      // Read the file content
-      fs.readFile(filePath, 'utf-8', (err, data) => {
-        if (err) {
-          console.error(`Error reading file ${file}:`, err);
-          return;
-        }
-
-        // Send the log data to the API for anomaly detection
-        sendLogsToAPI(data, file);
-      });
-    });
-  });
-}
-
-// Function to send log data to the anomaly detection API
-async function sendLogsToAPI(logData, fileName) {
   try {
-    const response = await axios.post(anomalyDetectionAPI, {
-      fileName: fileName,
-      logs: logData
-    }, {
-      headers: {
-        'Authorization': `Bearer ${apiKey}`  // Pass the API key in the Authorization header
+    const response = await axios.post(
+      QWEN_API_URL,
+      {
+        model: QWEN_MODEL,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: `Call transcript:\n\n${transcript}` },
+        ],
+        max_tokens: 512,
+        temperature: 0.3,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
       }
-    });
+    );
 
-    // Handle the API response
-    if (response.data.anomalyDetected) {
-      console.log(`Anomaly detected in file: ${fileName}`);
-      console.log(`Anomaly Details: ${response.data.details}`);
-    } else {
-      console.log(`No anomaly detected in file: ${fileName}`);
-    }
-  } catch (error) {
-    console.error('Error sending logs to API:', error);
+    const summary = response.data.choices?.[0]?.message?.content ?? '';
+    return { summary, error: null };
+  } catch (err) {
+    const message = err.response?.data?.error?.message ?? err.message;
+    return { summary: null, error: `Qwen API error: ${message}` };
   }
 }
-
-// Start reading and sending logs
-readAndSendLogs(logFolderPath);
